@@ -45,8 +45,9 @@ target_link_directories(${CMAKE_PROJECT_NAME} PRIVATE
 # Add sources to executable
 target_sources(${CMAKE_PROJECT_NAME} PRIVATE
     # Add user sources here
-    Core/Src/chassis_app.c
-    Core/Src/chassis_control.c
+    Core/Src/chassis_loop.c
+    Core/Src/chassis_remote.c
+    Core/Src/chassis_motion.c
     Core/Src/chassis_motor.c
     Core/Src/rc_sbus.c
 )

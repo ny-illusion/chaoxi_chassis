@@ -1,4 +1,4 @@
-#include "chassis_control.h"
+#include "chassis_motion.h"
 
 #include <assert.h>
 #include <math.h>
@@ -22,24 +22,25 @@ static void ZeroForce(const ChassisCommand *command)
 int main(void)
 {
     ChassisInput input = {
-        .vx_rpm = 1000.0f, .vy_rpm = 200.0f, .manual_wz_rpm = -500.0f,
+        /* vx_rpm、vy_rpm 分别给出前后和横移的轮速分量。
+         * spin 选择自旋档位，enabled 决定能否输出，use_gimbal 决定是否使用云台反馈。 */
+        .vx_rpm = 1000.0f, .vy_rpm = 200.0f,
         .spin = CHASSIS_SPIN_OFF, .enabled = 1, .use_gimbal = 0
     };
     ChassisGimbalFeedback feedback = {0};
+    /* feedback.relative_yaw_rad 是相对角（弧度），last_update_ms 是更新时间（毫秒），valid 是有效标志。 */
     ChassisCommand command;
+    /* command.vx_rpm、vy_rpm、wz_rpm 保存算出的三个轮速分量，mode 保存算出的工作模式。 */
     float wheels[CHASSIS_WHEEL_COUNT];
 
-    /* 没装云台：零反馈也能直接驾驶，非自旋时恢复手动转向。 */
+    /* 无云台且关闭自旋时，只控制平移。 */
     ChassisControl_Step(&input, &feedback, 1000, &command);
     assert(command.mode == CHASSIS_MANUAL);
     Near(command.vx_rpm, 1000.0f);
     Near(command.vy_rpm, 200.0f);
-    Near(command.wz_rpm, -500.0f);
-    input.manual_wz_rpm = 10000.0f;
-    ChassisControl_Step(&input, &feedback, 1000, &command);
-    Near(command.wz_rpm, CHASSIS_MANUAL_RPM_MAX);
+    Near(command.wz_rpm, 0.0f);
 
-    /* 自旋档覆盖手动转向，两档速度正确，长期切换不累积虚假角度。 */
+    /* 两个自旋档位取固定速度。 */
     input.spin = CHASSIS_SPIN_LOW;
     ChassisControl_Step(&input, &feedback, 1000, &command);
     assert(command.mode == CHASSIS_ROTATE_LOW);
@@ -51,8 +52,8 @@ int main(void)
     Near(command.wz_rpm, CHASSIS_SPIN_RPM_HIGH);
     Near(command.vx_rpm, 1000.0f);
     input.spin = CHASSIS_SPIN_OFF;
-    input.manual_wz_rpm = 0.0f;
     ChassisControl_Step(&input, &feedback, 10000, &command);
+    Near(command.wz_rpm, 0.0f); /* 退出高速档后旋转指令归零。 */
     Near(command.vx_rpm, 1000.0f);
     Near(command.vy_rpm, 200.0f);
 

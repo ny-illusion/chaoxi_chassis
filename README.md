@@ -7,9 +7,10 @@
 ```mermaid
 flowchart TD
     R["遥控器：摇杆和拨杆"] -->|"USART1 串口，SBUS 数据"| S["rc_sbus.c：拼出一帧，保存最新通道和接收时间"]
-    S -->|"本轮遥控副本"| A["chassis_app.c：解释摇杆、检查失控、读取档位"]
+    S -->|"本轮遥控副本"| A["chassis_loop.c：取本轮数据，依次调用各模块"]
     T["TIM6 定时器"] -->|"每 1 毫秒执行一次"| A
-    A -->|"想怎样移动"| C["Step：求前后、横移、旋转三个速度分量"]
+    A --> B["chassis_remote.c：解释摇杆、检查失控、读取档位"]
+    B -->|"想怎样移动"| C["Step：求前后、横移、旋转三个速度分量"]
     C --> M["Mix：分配四轮目标转速"]
     M --> P["chassis_motor.c：比较目标与实测转速，计算四路电流"]
     P -->|"CAN1 发送 0x200"| W["四个电调驱动四个轮子"]
@@ -68,11 +69,12 @@ flowchart TD
 
 | 想弄清的问题 | 打开文件 | 先找这个函数 |
 |---|---|---|
-| 一轮控制按什么顺序执行？ | [chassis_app.c](Core/Src/chassis_app.c) | `ChassisApp_Run1ms`，按顺序找到 CopyData、Step、Mix、Update |
+| 一轮控制按什么顺序执行？ | [chassis_loop.c](Core/Src/chassis_loop.c) | `ChassisApp_Run1ms`，按顺序找到 CopyData、Remote_Read、Step、Mix、Update |
 | 谁启动这一轮？ | [main.c](Core/Src/main.c) | `HAL_TIM_PeriodElapsedCallback` |
 | 遥控字节怎样变成通道？ | [rc_sbus.c](Core/Src/rc_sbus.c) | `RC_SBUS_ReadByte` |
-| 想向前走，四轮各转多快？ | [chassis_control.c](Core/Src/chassis_control.c) | `ChassisControl_Step` 和 `ChassisControl_Mix` |
+| 原始通道怎样变成平移速度和自旋档位？ | [chassis_remote.c](Core/Src/chassis_remote.c) | `ChassisRemote_Read` |
+| 想向前走，四轮各转多快？ | [chassis_motion.c](Core/Src/chassis_motion.c) | `ChassisControl_Step` 和 `ChassisControl_Mix` |
 | 实际轮速跟不上时怎么办？ | [chassis_motor.c](Core/Src/chassis_motor.c) | `ChassisMotor_Update` |
-| 怎么在电脑上验证这些计算？ | [chassis_control_test.c](tests/chassis_control_test.c) | 测试程序的 `main` 填入模拟输入，检查模式、方向、超时和轮速结果 |
+| 怎么在电脑上验证这些计算？ | [chassis_motion_test.c](tests/chassis_motion_test.c) | 测试程序的 `main` 填入模拟输入，检查模式、方向、超时和轮速结果 |
 
 `Core/Inc/` 的头文件列出函数接口、结构体成员和共用参数。`Core/Src/` 的同名源文件写具体步骤。第一次阅读时，从 `ChassisApp_Run1ms` 跟完上面的半杆示例，就能把几个文件连起来。

@@ -1,5 +1,5 @@
-#ifndef CHASSIS_CONTROL_H /* 如果本头文件还没加载过，就继续加载。 */
-#define CHASSIS_CONTROL_H /* 标记已经加载，避免重复定义。 */
+#ifndef CHASSIS_MOTION_H /* 如果本头文件还没加载过，就继续加载。 */
+#define CHASSIS_MOTION_H /* 标记已经加载，避免重复定义。 */
 
 #include <stdint.h> /* 引入固定宽度整数，如 uint8_t 是 8 位无符号整数。 */
 
@@ -16,9 +16,6 @@
 
 /* 高速自旋的轮速分量，单位 rpm。 */
 #define CHASSIS_SPIN_RPM_HIGH 3000.0f
-
-/* 手动转向的最大轮速分量，单位 rpm。 */
-#define CHASSIS_MANUAL_RPM_MAX 1500.0f
 
 /* 云台跟随的比例系数，角度越大转向越快。 */
 #define CHASSIS_FOLLOW_KP 2000.0f
@@ -44,7 +41,7 @@ typedef enum /* 定义一组有名字的整数，用来表示不同档位或模�
 typedef enum /* 定义一组有名字的整数，用来表示不同档位或模式。 */
 {
     CHASSIS_ZERO_FORCE = 0,  /* 零力输出。 */
-    CHASSIS_MANUAL,          /* 手动转向。 */
+    CHASSIS_MANUAL,          /* 无云台且关闭自旋：只控制平移。 */
     CHASSIS_FOLLOW_GIMBAL,   /* 跟随云台。 */
     CHASSIS_ROTATE_LOW,      /* 低速自旋。 */
     CHASSIS_ROTATE_HIGH      /* 高速自旋。 */
@@ -63,7 +60,6 @@ typedef struct /* 把相关数据放到同一个结构体中，并为类型起�
 {
     float vx_rpm;             /* x 方向速度，前方为正，单位 rpm。 */
     float vy_rpm;             /* y 方向速度，左方为正，单位 rpm。 */
-    float manual_wz_rpm;      /* 手动转向速度，逆时针为正，单位 rpm。 */
     ChassisSpinMode spin;     /* 自旋档位。 */
     uint8_t enabled;          /* 1 表示允许输出，0 表示零力。 */
     uint8_t use_gimbal;       /* 1 表示使用云台角度，0 表示不用。 */

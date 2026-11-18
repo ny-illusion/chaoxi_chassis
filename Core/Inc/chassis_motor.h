@@ -2,7 +2,7 @@
 #define CHASSIS_MOTOR_H /* 标记已经加载，避免重复定义。 */
 
 #include "main.h" /* 引入芯片库公共类型和错误处理声明。 */
-#include "chassis_control.h" /* 引入底盘运动计算接口和数据类型。 */
+#include "chassis_motion.h" /* 引入底盘运动计算接口和数据类型。 */
 
 /* 四个底盘电机共用这一帧发送电流。 */
 #define CHASSIS_MOTOR_CAN_TX_ID 0x200U

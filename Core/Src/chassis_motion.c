@@ -8,9 +8,9 @@
  * volatile 提醒编译器每次访问实际内存，不保证多字段读写不被打断。
  * -> 访问指针所指结构体的成员；& 取地址；! 取反；&& 且；|| 或。
  */
-#include "chassis_control.h" /* 引入底盘运动计算接口和数据类型。 */
+#include "chassis_motion.h" /* 引入底盘运动计算接口和数据类型。 */
 
-#include <math.h>          /* cosf、sinf、fabsf、isfinite、fmodf */
+#include <math.h> /* sinf/cosf 换算方向，fabsf 取绝对值，fmodf 去掉整圈，isfinite 检查数值。 */
 
 #define CHASSIS_PI 3.14159265f /* 圆周率 π；末尾 f 表示单精度小数。 */
 #define CHASSIS_TWO_PI 6.28318531f /* 2π 弧度是一整圈，也就是 360 度。 */
@@ -73,9 +73,6 @@ void ChassisControl_Step(
     /* 平移速度非法时零力。 */
     if (!isfinite(input->vy_rpm)) return;
 
-    /* 手动转向非法时零力。 */
-    if (!isfinite(input->manual_wz_rpm)) return;
-
     /* 配置了云台才检查云台反馈。 */
     if (input->use_gimbal)
     {
@@ -112,7 +109,7 @@ void ChassisControl_Step(
         command->wz_rpm = CHASSIS_SPIN_RPM_HIGH;
         break; /* 结束当前 switch 分支，避免接着执行下一个档位。 */
 
-    case CHASSIS_SPIN_OFF: /* 自旋关闭时，改用手动转向或云台跟随。 */
+    case CHASSIS_SPIN_OFF: /* 关闭自旋时，无云台只平移，有云台则跟随。 */
         /* 不开启自旋时，有云台就跟随云台。 */
         if (input->use_gimbal)
         {
@@ -131,11 +128,8 @@ void ChassisControl_Step(
         }
         else /* 前面的条件不满足时，执行下面的分支。 */
         {
-            /* 没装云台时使用手动转向模式。 */
+            /* 无云台只平移，wz_rpm 保持本周期初始值 0。 */
             command->mode = CHASSIS_MANUAL;
-
-            /* 摇杆转向乘以倍率，并限制最大值。 */
-            command->wz_rpm = Clamp(input->manual_wz_rpm, CHASSIS_MANUAL_RPM_MAX);
         }
         break; /* 结束当前 switch 分支，避免接着执行下一个档位。 */
 

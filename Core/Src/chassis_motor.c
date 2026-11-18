@@ -9,7 +9,7 @@
  */
 #include "chassis_motor.h" /* 引入电机反馈、PI 和发送接口。 */
 #include "can.h" /* 引入CAN 外设句柄和初始化声明。 */
-#include <math.h> /* 引入数学函数：isfinite 检查有限数，fabsf 求绝对值，cosf/sinf 求余弦/正弦，fmodf 求余数。 */
+#include <math.h> /* 本文件用 isfinite 检查控制周期和目标转速，排除 NaN 和无穷大。 */
 
 /* 单个电机的数据。 */
 typedef struct /* 把相关数据放到同一个结构体中，并为类型起名。 */
@@ -23,6 +23,9 @@ typedef struct /* 把相关数据放到同一个结构体中，并为类型起�
 
 /* 四个电机的状态，保留为全局方便调试器 Watch。 */
 Motor_t motor[CHASSIS_WHEEL_COUNT];
+/* motor[i] 保存第 i 个电机的数据，四个元素依次对应左前、右前、右后、左后。
+ * motor[i].rpm 是实测转速，motor[i].target 是目标转速，两者单位都是转/分。
+ * motor[i].err 是转速误差，motor[i].integ 是累积的积分项，motor[i].cmd 是发给电调的电流指令。 */
 
 /* P 比例系数：当前转速误差乘以它，得到比例输出；这里只用 PI，没有 D 微分项。 */
 #define MOTOR_PID_KP 5.0f

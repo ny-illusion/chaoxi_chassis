@@ -1,5 +1,5 @@
-#ifndef CHASSIS_APP_H /* 如果本头文件还没加载过，就继续加载。 */
-#define CHASSIS_APP_H /* 标记已经加载，避免重复定义。 */
+#ifndef CHASSIS_LOOP_H /* 如果本头文件还没加载过，就继续加载。 */
+#define CHASSIS_LOOP_H /* 标记已经加载，避免重复定义。 */
 
 #include <stdint.h> /* 引入固定宽度整数，如 uint8_t 是 8 位无符号整数。 */
 

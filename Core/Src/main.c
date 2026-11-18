@@ -25,7 +25,7 @@
 
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
-#include "chassis_app.h" /* 引入底盘整体调度接口。 */
+#include "chassis_loop.h" /* 引入底盘整体调度接口。 */
 #include "chassis_motor.h" /* 引入电机反馈、PI 和发送接口。 */
 #include "rc_sbus.h" /* 引入遥控数据类型和接收接口。 */
 

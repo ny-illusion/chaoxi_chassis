@@ -1,64 +1,37 @@
 /*
  * 底盘调度：遥控输入 -> 模式和速度计算 -> 四轮分配 -> 电机输出。
- * App=应用调度；Stick=摇杆；Scale=缩放；Threshold=判断用的分界值。
+ * Loop=循环；每 1 毫秒运行一次底盘控制。
  * Gimbal=云台；Feedback=反馈；Relative=相对；Yaw=水平转角。
  * Snapshot=某一时刻的数据副本，复制期间防止中断改写，以免新旧数据混用。
  * C 语法：static 全局量只在本文件可见，局部 static 跨调用保留值；const 表示不能通过它修改数据。
  * volatile 提醒编译器每次访问实际内存，不保证多字段读写不被打断。
  * -> 访问指针所指结构体的成员；& 取地址；! 取反；&& 且；|| 或。
  */
-#include "chassis_app.h" /* 引入底盘整体调度接口。 */
-#include "chassis_control.h" /* 引入底盘运动计算接口和数据类型。 */
+#include "chassis_loop.h" /* 引入底盘整体调度接口。 */
+#include "chassis_motion.h" /* 引入底盘运动计算接口和数据类型。 */
+#include "chassis_remote.h" /* 遥控通道与底盘动作的对应规则。 */
 #include "chassis_motor.h" /* 引入电机反馈、PI 和发送接口。 */
 #include "rc_sbus.h" /* 引入遥控数据类型和接收接口。 */
 #include "gpio.h" /* 引入引脚初始化声明。 */
 #include "main.h" /* 引入芯片库公共类型和错误处理声明。 */
-#include <math.h> /* 引入数学函数：isfinite 检查有限数，fabsf 求绝对值，cosf/sinf 求余弦/正弦，fmodf 求余数。 */
-
-/* 摇杆中位。 */
-#define APP_RC_MID 1024.0f
-
-/* 摇杆中位到一端的距离。 */
-#define APP_RC_HALF 671.0f
-
-/* SD 总使能阈值。 */
-#define APP_RC_ENABLE_THRESHOLD 1400U
-
-/* 遥控超时时间，单位 ms。 */
-#define APP_RC_LOST_MS 100U
-
-/* 满杆目标转速，单位 rpm。 */
-#define APP_TARGET_RPM_MAX 8000.0f
+#include <math.h> /* 本文件用 isfinite 判断收到的角度是否为有限数。 */
 
 /* 四轮合成后的最大转速，单位 rpm。 */
 #define APP_ROTOR_RPM_LIMIT 8000.0f
-
-/* 自旋档位前阈值。 */
-#define APP_SC_TH_LOW 690.0f
-
-/* 自旋档位后阈值。 */
-#define APP_SC_TH_HIGH 1360.0f
 
 /* 控制周期，单位 s。 */
 #define APP_CONTROL_DT 0.001f
 
 /* 底盘最后生成的命令，方便调试器 Watch。 */
 ChassisCommand chassis_command;
-
-/* 当前自旋档位，方便调试器 Watch。 */
-uint8_t rc_mode = CHASSIS_SPIN_OFF;
-
-/* 当前摇杆值，方便调试器 Watch。 */
-float rc_vx; /* 保存前后摇杆的比例，范围为 -1 到 +1。 */
-float rc_vy; /* 保存左右摇杆的比例，范围为 -1 到 +1。 */
-float rc_wz; /* 保存转向摇杆的比例，范围为 -1 到 +1。 */
-
-/* 当前使能和失控状态，方便调试器 Watch。 */
-uint8_t rc_enable; /* enable 表示允许；记录 SD 是否允许底盘输出。 */
-uint8_t rc_lost = 1; /* lost 表示丢失；上电先认为遥控不可用，等待有效数据。 */
+/* chassis_command.vx_rpm、vy_rpm、wz_rpm 分别是前后、横移、旋转的轮速分量（转/分）。
+ * chassis_command.mode 是本轮选定的底盘工作模式。 */
 
 /* 保存最近的云台反馈。 */
 static volatile ChassisGimbalFeedback gimbal_feedback;
+/* gimbal_feedback.relative_yaw_rad 保存云台相对车头的水平角（弧度）。
+ * gimbal_feedback.last_update_ms 保存底盘最近更新反馈的时刻（毫秒）。
+ * gimbal_feedback.valid 为 1 表示角度数值有效；是否超时还要看更新时间。 */
 
 /* 写入云台反馈。 */
 /* 函数作用：写入云台相对底盘的水平角 relative_yaw_rad（弧度），同时记录接收时间和有效状态。 */
@@ -82,26 +55,6 @@ void ChassisApp_SetGimbalFeedback(float relative_yaw_rad)
     /* 恢复中断状态。 */
     __set_PRIMASK(irq_state); /* 恢复之前的中断屏蔽状态，不能简单地一律打开中断。 */
 }
-/* 把 SBUS 原始值变成 -1 到 +1。 */
-/* 函数作用：输入 raw 是 SBUS 原始通道值；返回 -1 到 +1 的摇杆比例，并把中位附近的小抖动归零。 */
-static float App_ScaleStick(uint16_t raw)
-{
-    /* 转成相对中位的比例。 */
-    float value = (APP_RC_MID - (float)raw) / APP_RC_HALF;
-
-    /* 限制最大值。 */
-    if (value > 1.0f) value = 1.0f;
-
-    /* 限制最小值。 */
-    if (value < -1.0f) value = -1.0f;
-
-    /* 把中位附近 ±0.05 的输入归零，设置摇杆死区以避免轻微抖动。 */
-    if (value > -0.05f && value < 0.05f) value = 0.0f;
-
-    /* 返回归一化结果。 */
-    return value;
-}
-
 /* 初始化底盘应用。 */
 /* 函数作用：初始化电机软件状态和指示灯；不负责初始化 CAN、串口或定时器硬件。 */
 void ChassisApp_Init(void)
@@ -128,9 +81,19 @@ void ChassisApp_Run1ms(void)
 
     /* 遥控数据快照。 */
     RC_SBUS_Snapshot rc;
+    /* 下面这些成员由 RC_SBUS_CopyData(&rc) 一次填好，供本轮控制使用。
+     * rc.channels[0..15]  存放遥控器 16 个通道的原始值，channels[0] 对应第 1 通道。
+     * rc.last_frame_ms    最近收到一帧有效数据的时刻，单位毫秒，用来判断超时。
+     * rc.frame_count      已累计收到多少帧格式正确的数据。
+     * rc.valid            1 表示曾收到格式正确的数据，当前是否失联还要看时间。
+     * rc.failsafe         1 表示接收机报告丢帧或失控。 */
 
     /* 云台反馈快照。 */
     ChassisGimbalFeedback feedback;
+    /* feedback 是本轮使用的副本，下面会从 gimbal_feedback 复制这三个成员。
+     * feedback.relative_yaw_rad  云台相对车头的水平角，单位弧度，对齐时为 0。
+     * feedback.last_update_ms    底盘最近更新这份反馈的时刻，单位毫秒。
+     * feedback.valid             1 表示角度数值有效，0 表示无效。 */
 
     /* 获取遥控快照。 */
     RC_SBUS_CopyData(&rc);
@@ -156,43 +119,8 @@ void ChassisApp_Run1ms(void)
     /* 保存当前时间。 */
     uint32_t now = HAL_GetTick();
 
-    /* 前后摇杆。 */
-    rc_vx = App_ScaleStick(rc.channels[2]);
-
-    /* 左右摇杆。 */
-    rc_vy = App_ScaleStick(rc.channels[3]);
-
-    /* 转向摇杆。 */
-    rc_wz = App_ScaleStick(rc.channels[0]);
-
-    /* 读取 SD 总使能。 */
-    rc_enable = (uint8_t)(rc.channels[5] > APP_RC_ENABLE_THRESHOLD);
-
-    /* 判断遥控是否失控。 */
-    rc_lost = (uint8_t)(!rc.valid || rc.failsafe ||
-                        (uint32_t)(now - rc.last_frame_ms) > APP_RC_LOST_MS); /* 距离上一帧超过 100 ms 也算失控；无符号相减可处理毫秒计数回绕。 */
-
-    /* 通道值异常时不自旋。 */
-    if (rc.channels[4] < 300U) rc_mode = CHASSIS_SPIN_OFF;
-
-    /* SC 上档对应高速自旋。 */
-    else if ((float)rc.channels[4] < APP_SC_TH_LOW) rc_mode = CHASSIS_SPIN_HIGH;
-
-    /* SC 中档对应低速自旋。 */
-    else if ((float)rc.channels[4] < APP_SC_TH_HIGH) rc_mode = CHASSIS_SPIN_LOW;
-
-    /* SC 下档对应不自旋。 */
-    else rc_mode = CHASSIS_SPIN_OFF;
-
-    /* 组装底盘输入。 */
-    ChassisInput input = {
-        .vx_rpm = rc_vx * APP_TARGET_RPM_MAX, /* 前后摇杆比例乘以满杆轮速分量，得到前后输入。 */
-        .vy_rpm = rc_vy * APP_TARGET_RPM_MAX, /* 左右摇杆比例乘以满杆轮速分量，得到横移输入。 */
-        .manual_wz_rpm = rc_wz * CHASSIS_MANUAL_RPM_MAX, /* 转向摇杆比例乘以手动转向上限。 */
-        .spin = (ChassisSpinMode)rc_mode, /* spin 表示自旋；把档位数值转换为自旋档位类型。 */
-        .enabled = (uint8_t)(rc_enable && !rc_lost), /* SD 允许并且遥控没失控时，才允许输出。 */
-        .use_gimbal = CHASSIS_GIMBAL_INSTALLED /* 根据配置决定是否使用云台角度；0 不用，1 使用。 */
-    };
+    /* 根据本轮的遥控快照，算出平移速度、自旋档位和使能。 */
+    ChassisInput input = ChassisRemote_Read(&rc, now);
 
     /* 计算底盘命令。 */
     ChassisControl_Step(&input, &feedback, now, &chassis_command);

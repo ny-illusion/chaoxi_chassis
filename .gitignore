@@ -1,0 +1,36 @@
+# CMake / Ninja 构建目录、缓存和本机预设
+/build/
+/out/
+/cmake-build-*/
+/CMakeCache.txt
+/CMakeFiles/
+/cmake_install.cmake
+/build.ninja
+/.ninja_deps
+/.ninja_log
+/compile_commands.json
+/CMakeUserPresets.json
+
+# 编译和链接产物（固件如需发布，可单独上传到 GitHub Releases）
+*.o
+*.obj
+*.elf
+*.hex
+*.bin
+*.map
+*.su
+
+# CubeMX 临时文件、编辑器备份
+/mx.scratch
+*.bak
+*.bak_*
+*.swp
+*~
+
+# 本地交接笔记；docs/ 中的项目说明仍正常提交
+/RM电控_上下文交接_*.md
+
+# 操作系统杂项
+Thumbs.db
+Desktop.ini
+.DS_Store

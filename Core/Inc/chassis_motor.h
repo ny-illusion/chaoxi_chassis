@@ -24,4 +24,9 @@ void ChassisMotor_ReadCAN(const CAN_RxHeaderTypeDef *header, const uint8_t *data
 void ChassisMotor_Update(const float target_rpm[CHASSIS_WHEEL_COUNT],
                          uint8_t enabled, float dt_s);
 
+void GM6020_Update(float target_rpm, uint8_t enabled, float dt_s,
+                   uint8_t stick_centered);
+
+#define GM6020_YAW_DIR 1.0f
+
 #endif

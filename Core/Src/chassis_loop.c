@@ -22,6 +22,9 @@
 /* 控制周期，单位 s。 */
 #define APP_CONTROL_DT 0.001f
 
+/* 回中时按底盘转向指令给云台反向补偿，单位为云台 rpm / 轮速分量 rpm。 */
+#define APP_GIMBAL_FOLLOW_COMPENSATION 0.005f
+
 /* 底盘最后生成的命令，方便调试器 Watch。 */
 ChassisCommand chassis_command;
 /* chassis_command.vx_rpm、vy_rpm、wz_rpm 分别是前后、横移、旋转的轮速分量（转/分）。
@@ -132,6 +135,16 @@ void ChassisApp_Run1ms(void)
     ChassisMotor_Update(wheel_targets,
                         (uint8_t)(chassis_command.mode != CHASSIS_ZERO_FORCE), /* 模式不是零力时，才让电机模块计算输出电流。 */
                         APP_CONTROL_DT); /* 传入控制间隔 0.001 秒，供 PI 积分计算使用。 */
+
+    uint8_t stick_centered = (uint8_t)(input.yaw_target_rpm == 0.0f);
+    float gimbal_target_rpm = input.yaw_target_rpm;
+    if (stick_centered && chassis_command.mode == CHASSIS_FOLLOW_GIMBAL)
+    {
+        /* 车头追齐时给云台留出相对转动，避免回中制动把云台拖着走。 */
+        gimbal_target_rpm = -GM6020_YAW_DIR * APP_GIMBAL_FOLLOW_COMPENSATION *
+                            chassis_command.wz_rpm;
+    }
+    GM6020_Update(gimbal_target_rpm, input.enabled, APP_CONTROL_DT, stick_centered);
 
     /* 每 100 ms 更新一次 LED。 */
     if ((uint32_t)(now - led_ms) >= 100U)

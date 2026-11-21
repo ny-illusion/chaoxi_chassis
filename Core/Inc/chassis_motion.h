@@ -6,7 +6,7 @@
 /* 命名缩写：rpm=每分钟转数，rad=弧度，ms=毫秒，wz=绕 z 轴旋转。 */
 
 /* 0 表示还没装云台。 */
-#define CHASSIS_GIMBAL_INSTALLED 0U
+#define CHASSIS_GIMBAL_INSTALLED 1U
 
 /* 云台反馈超过 100 ms 没更新就认为失效。 */
 #define CHASSIS_GIMBAL_TIMEOUT_MS 100U
@@ -63,6 +63,7 @@ typedef struct /* 把相关数据放到同一个结构体中，并为类型起�
     ChassisSpinMode spin;     /* 自旋档位。 */
     uint8_t enabled;          /* 1 表示允许输出，0 表示零力。 */
     uint8_t use_gimbal;       /* 1 表示使用云台角度，0 表示不用。 */
+    float yaw_target_rpm;     /* GM6020 的目标转速，带正负号。 */
 } ChassisInput;
 
 /* 底盘控制的输出数据。 */

@@ -10,7 +10,7 @@
 #include "chassis_motor.h" /* 引入电机反馈、PI 和发送接口。 */
 #include "can.h" /* 引入CAN 外设句柄和初始化声明。 */
 #include <math.h> /* 本文件用 isfinite 检查控制周期和目标转速，排除 NaN 和无穷大。 */
-
+#include "chassis_loop.h"
 /* 单个电机的数据。 */
 typedef struct /* 把相关数据放到同一个结构体中，并为类型起名。 */
 {
@@ -27,6 +27,28 @@ Motor_t motor[CHASSIS_WHEEL_COUNT];
  * motor[i].rpm 是实测转速，motor[i].target 是目标转速，两者单位都是转/分。
  * motor[i].err 是转速误差，motor[i].integ 是累积的积分项，motor[i].cmd 是发给电调的电流指令。 */
 
+static volatile uint32_t gm6020_rx_count;   /* 收到底盘上这台 GM6020 的帧数 */
+static volatile uint16_t gm6020_angle_raw;  /* 单圈编码器读数，0～8191 */
+static volatile int16_t  gm6020_rpm;        /* 实际转速，单位 rpm，有正负 */
+static volatile int16_t gm6020_current_raw;  /* 电机反馈的实际转矩电流原始值 */
+
+#define GM6020_KP           160.0f
+#define GM6020_BRAKE_KP     160.0f  /* 新增，松杆时的制动比例系数 */
+#define GM6020_KI           160.0f
+#define GM6020_VOLT_LIMIT  9000.0f
+#define GM6020_TIMEOUT_MS   20U
+#define GM6020_ENCODER_COUNTS 8192U
+/* 可填写实测的对齐计数。默认使用上电后的第一帧有效角度。 */
+
+static uint16_t gm6020_yaw_zero_raw = 4250; /* 记录上电后第一帧的角度，作为零位。 */
+static float gm6020_integral;
+static volatile uint8_t  gm6020_seen;
+static volatile uint32_t gm6020_last_rx_ms;
+static volatile uint32_t gm6020_tx_fail_count;
+
+
+
+
 /* P 比例系数：当前转速误差乘以它，得到比例输出；这里只用 PI，没有 D 微分项。 */
 #define MOTOR_PID_KP 5.0f
 
@@ -34,7 +56,7 @@ Motor_t motor[CHASSIS_WHEEL_COUNT];
 #define MOTOR_PID_KI 20.0f
 
 /* 单轮输出上限。 */
-#define MOTOR_OUTPUT_MAX 6000.0f
+#define MOTOR_OUTPUT_MAX 4000.0f
 
 /* 积分项上限。 */
 #define MOTOR_INTEGRAL_MAX 8000.0f
@@ -69,7 +91,31 @@ void ChassisMotor_ReadCAN(const CAN_RxHeaderTypeDef *header, const uint8_t *data
     if (header->RTR != CAN_RTR_DATA) return; /* RTR 表示帧类型；只处理数据帧，不处理远程请求帧。 */
     if (header->DLC != 8U) return; /* DLC 表示数据长度；必须刚好有 8 个字节。 */
 
-    /* 只接收四个电调的 0x201~0x204。 */
+    /* ID 为 2 的 GM6020，其反馈帧编号是 0x206。 */
+    if (header->StdId == 0x206U)
+    {
+        gm6020_angle_raw = (uint16_t)(((uint16_t)data[0] << 8) | data[1]);
+        gm6020_rpm = (int16_t)(((uint16_t)data[2] << 8) | data[3]);
+        gm6020_current_raw = (int16_t)(((uint16_t)data[4] << 8) | data[5]);
+        gm6020_last_rx_ms = HAL_GetTick();
+        gm6020_seen = 1U;
+        gm6020_rx_count++;
+
+        if (gm6020_angle_raw < GM6020_ENCODER_COUNTS)
+        {
+            if (gm6020_yaw_zero_raw == GM6020_ENCODER_COUNTS)
+                gm6020_yaw_zero_raw = gm6020_angle_raw;
+
+            int32_t delta = (int32_t)gm6020_angle_raw - gm6020_yaw_zero_raw;
+            float relative_yaw_rad = GM6020_YAW_DIR * (float)delta *
+                                     (6.283185307f / (float)GM6020_ENCODER_COUNTS);
+            ChassisApp_SetGimbalFeedback(relative_yaw_rad);
+        }
+
+        return;
+    }
+
+    /* 四个底盘轮仍按 0x201~0x204 解析。 */
     if (header->StdId < CHASSIS_MOTOR_CAN_RX_FIRST_ID) return;
     if (header->StdId > CHASSIS_MOTOR_CAN_RX_LAST_ID) return;
 
@@ -197,4 +243,76 @@ void ChassisMotor_Update(const float target_rpm[CHASSIS_WHEEL_COUNT],
     /* 发送电流帧。 */
     uint32_t mailbox; /* mailbox 表示发送邮箱；芯片库会写回使用的邮箱编号。 */
     HAL_CAN_AddTxMessage(&hcan1, &header, data, &mailbox);
+}
+
+
+void GM6020_Update(float target_rpm, uint8_t enabled, float dt_s,
+                   uint8_t stick_centered)
+{
+    /* CAN 中断会更新这三个值，先一起复制，供本轮计算使用。 */
+    uint32_t irq = __get_PRIMASK();
+    __disable_irq();
+    int16_t rpm = gm6020_rpm;
+    uint8_t seen = gm6020_seen;
+    uint32_t last_rx = gm6020_last_rx_ms;
+    __set_PRIMASK(irq);
+
+    uint32_t age_ms = HAL_GetTick() - last_rx;
+    int16_t cmd = 0;
+
+    if (enabled && seen && age_ms <= GM6020_TIMEOUT_MS &&
+        isfinite(target_rpm) && isfinite(dt_s) && dt_s > 0.0f)
+    {
+                float measured_rpm = (float)rpm;
+        float voltage;
+
+        if (stick_centered)
+        {
+            /* 摇杆回中时清掉驱动积分，按当前目标做速度制动。 */
+            gm6020_integral = 0.0f;
+            voltage = GM6020_BRAKE_KP * (target_rpm - measured_rpm);
+        }
+        else
+        {
+            float error = target_rpm - measured_rpm;
+            float p = GM6020_KP * error;
+            float next_i = gm6020_integral + GM6020_KI * error * dt_s;
+            float trial = p + next_i;
+
+            if ((trial <= GM6020_VOLT_LIMIT || error < 0.0f) &&
+                (trial >= -GM6020_VOLT_LIMIT || error > 0.0f))
+            {
+                gm6020_integral = next_i;
+            }
+
+            voltage = p + gm6020_integral;
+        }
+
+        if (voltage >  GM6020_VOLT_LIMIT) voltage =  GM6020_VOLT_LIMIT;
+        if (voltage < -GM6020_VOLT_LIMIT) voltage = -GM6020_VOLT_LIMIT;
+        cmd = (int16_t)voltage;
+    }
+    else
+    {
+        /* SD 关闭、遥控失联或电机反馈过期，本轮发零并清积分。 */
+        gm6020_integral = 0.0f;
+    }
+
+    CAN_TxHeaderTypeDef header = {0};
+    header.StdId = 0x1FFU;
+    header.IDE = CAN_ID_STD;
+    header.RTR = CAN_RTR_DATA;
+    header.DLC = 8U;
+
+    uint16_t bits = (uint16_t)cmd;
+    uint8_t data[8] = {0};
+    data[2] = (uint8_t)(bits >> 8);
+    data[3] = (uint8_t)(bits & 0xFFU);
+
+    uint32_t mailbox;
+    if (HAL_CAN_AddTxMessage(&hcan1, &header, data, &mailbox) != HAL_OK)
+    {
+        gm6020_tx_fail_count++;
+        gm6020_integral = 0.0f;
+    }
 }

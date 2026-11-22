@@ -89,12 +89,14 @@ int main(void)
     feedback.relative_yaw_rad = 0.01f;
     ChassisControl_Step(&input, &feedback, 1000, &command);
     Near(command.wz_rpm, 0.0f);
-    feedback.relative_yaw_rad = 0.1f;
+    const float follow_yaw = CHASSIS_FOLLOW_DEADBAND_RAD + 0.05f;
+    const float follow_rpm = CHASSIS_FOLLOW_KP * 0.05f;
+    feedback.relative_yaw_rad = follow_yaw;
     ChassisControl_Step(&input, &feedback, 1000, &command);
-    Near(command.wz_rpm, 200.0f);
-    feedback.relative_yaw_rad = 2.0f * PI_F - 0.1f;
+    Near(command.wz_rpm, follow_rpm);
+    feedback.relative_yaw_rad = 2.0f * PI_F - follow_yaw;
     ChassisControl_Step(&input, &feedback, 1000, &command);
-    Near(command.wz_rpm, -200.0f);
+    Near(command.wz_rpm, -follow_rpm);
 
     /* 虚拟云台朝向固定，底盘正转 90 度：相对角 -90 度，前进变右移。
      * 这是电脑上的输入场景，不将虚拟角度接到实际电机控制中。

@@ -11,6 +11,9 @@ void ChassisApp_Init(void);
 /* relative_yaw_rad：云台相对底盘的角度，单位 rad。 */
 /* 函数作用：写入云台相对底盘的水平角 relative_yaw_rad（弧度），同时记录接收时间和有效状态。 */
 void ChassisApp_SetGimbalFeedback(float relative_yaw_rad);
+/* 主循环每次成功读到 BMI088 Z 轴角速度后调用，单位 °/s。 */
+void ChassisApp_SetGyroZ(float gyro_z_dps);
+
 /* 1 ms 执行一次底盘应用。 */
 /* 函数作用：每隔 1 ms 调用一次：读取遥控和云台副本，判断失控，计算四轮目标并发送电流。 */
 void ChassisApp_Run1ms(void);

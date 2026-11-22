@@ -19,8 +19,8 @@
 /* USER CODE END Header */
 
 /* Define to prevent recursive inclusion -------------------------------------*/
-#ifndef __MAIN_H /* 如果本头文件还没加载过，就继续加载。 */
-#define __MAIN_H /* 标记已经加载，避免重复定义。 */
+#ifndef __MAIN_H
+#define __MAIN_H
 
 #ifdef __cplusplus
 extern "C" {
@@ -50,7 +50,6 @@ extern "C" {
 /* USER CODE END EM */
 
 /* Exported functions prototypes ---------------------------------------------*/
-/* 函数作用：硬件初始化失败时调用；关闭可屏蔽中断并永久等待。这里没有主动发送零电流。 */
 void Error_Handler(void);
 
 /* USER CODE BEGIN EFP */

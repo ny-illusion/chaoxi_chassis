@@ -18,10 +18,10 @@
 #define CHASSIS_SPIN_RPM_HIGH 3000.0f
 
 /* 云台跟随的比例系数，角度越大转向越快。 */
-#define CHASSIS_FOLLOW_KP 2000.0f
+#define CHASSIS_FOLLOW_KP 3000.0f
 
 /* 云台跟随的最大转向轮速分量，单位 rpm。 */
-#define CHASSIS_FOLLOW_RPM_MAX 1500.0f
+#define CHASSIS_FOLLOW_RPM_MAX 2250.0f
 
 /* 云台跟随的角度死区，单位 rad。 */
 #define CHASSIS_FOLLOW_DEADBAND_RAD 0.035f
@@ -63,7 +63,8 @@ typedef struct /* 把相关数据放到同一个结构体中，并为类型起�
     ChassisSpinMode spin;     /* 自旋档位。 */
     uint8_t enabled;          /* 1 表示允许输出，0 表示零力。 */
     uint8_t use_gimbal;       /* 1 表示使用云台角度，0 表示不用。 */
-    float yaw_target_rpm;     /* GM6020 的目标转速，带正负号。 */
+    float yaw_target_rpm;     /* yaw 摇杆目标转速，采用 GM6020 的正方向。 */
+    float gimbal_hold_error_rad; /* 松杆锁定的对地航向减去云台当前对地航向；推杆时为零。 */
 } ChassisInput;
 
 /* 底盘控制的输出数据。 */
@@ -74,6 +75,9 @@ typedef struct /* 把相关数据放到同一个结构体中，并为类型起�
     float wz_rpm;             /* 底盘旋转速度分量，单位 rpm。 */
     ChassisMode mode;         /* 本周期工作模式。 */
 } ChassisCommand;
+
+/* 将角度折回 [-π, π]，单位 rad。 */
+float ChassisControl_WrapAngle(float angle);
 
 /* 函数名：Step = 计算一个控制周期。 */
 /* input：输入数据指针。 */

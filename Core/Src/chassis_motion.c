@@ -1,7 +1,7 @@
 /*
  * 底盘算法：根据输入选择运动模式，并计算四轮各自的目标转速。
  * Step=计算一轮控制；Mix=分配到四轮；Clamp=限制数值范围。
- * WrapAngle=把角度折回一圈内；Peak=最大绝对值；Limit=上限；Target=目标。
+ * ChassisControl_WrapAngle=把角度折回一圈内；Peak=最大绝对值；Limit=上限；Target=目标。
  * Spin/Rotate=旋转；Follow=跟随；Manual=手动；Deadband=不响应的小范围。
  * vx/vy/wz 在本工程都是转子轮速分量，不是米每秒或弧度每秒。
  * C 语法：static 全局量只在本文件可见，局部 static 跨调用保留值；const 表示不能通过它修改数据。
@@ -35,7 +35,7 @@ static float Clamp(float value, float limit)
 
 /* 把角度折叠到 -π 到 π 之间。 */
 /* 函数作用：输入 angle（弧度）；返回 -π 到 +π 内的等效角，避免跨一圈时跟随方向突变。 */
-static float WrapAngle(float angle)
+float ChassisControl_WrapAngle(float angle)
 {
     /* 先去掉整圈，避免角度越来越大。 */
     angle = fmodf(angle, CHASSIS_TWO_PI);
@@ -87,7 +87,7 @@ void ChassisControl_Step(
             return; /* 立即结束本次函数调用，不再执行后面的代码。 */
 
         /* 把云台角度折叠到 -π 到 π。 */
-        yaw = WrapAngle(feedback->relative_yaw_rad);
+        yaw = ChassisControl_WrapAngle(feedback->relative_yaw_rad);
     }
 
     /* 根据自旋档位选择底盘旋转方式。 */
@@ -113,17 +113,23 @@ void ChassisControl_Step(
         /* 不开启自旋时，有云台就跟随云台。 */
         if (input->use_gimbal)
         {
+            const uint8_t stick_centered = input->yaw_target_rpm == 0.0f;
+            if (stick_centered && !isfinite(input->gimbal_hold_error_rad)) return;
+            /* (云台−车头) + (锁定航向−云台) = 锁定航向−车头。 */
+            const float follow_error = stick_centered
+                ? ChassisControl_WrapAngle(yaw + input->gimbal_hold_error_rad)
+                : yaw;
             /* 标记为云台跟随模式。 */
             command->mode = CHASSIS_FOLLOW_GIMBAL;
 
             /* 角度超过死区才转动，减少原地抖动。 */
-            if (fabsf(yaw) > CHASSIS_FOLLOW_DEADBAND_RAD)
+            const float outside_deadband = fabsf(follow_error) - CHASSIS_FOLLOW_DEADBAND_RAD;
+            if (outside_deadband > 0.0f)
             {
-                /* 比例控制：角度越大，跟随转向越大。 */
-                command->wz_rpm = CHASSIS_FOLLOW_KP * yaw;
-
-                /* 限制跟随转向的最大轮速分量。 */
-                command->wz_rpm = Clamp(command->wz_rpm, CHASSIS_FOLLOW_RPM_MAX);
+                /* 回中后仅按超出死区的角度给速度，走到边界时连续降至零。 */
+                const float turn_error = stick_centered
+                    ? copysignf(outside_deadband, follow_error) : follow_error;
+                command->wz_rpm = Clamp(CHASSIS_FOLLOW_KP * turn_error, CHASSIS_FOLLOW_RPM_MAX);
             }
         }
         else /* 前面的条件不满足时，执行下面的分支。 */
@@ -138,16 +144,14 @@ void ChassisControl_Step(
         return; /* 立即结束本次函数调用，不再执行后面的代码。 */
     }
 
-    /* 计算角度的余弦。 */
-    float c = cosf(yaw);
+    /* 每周期用当前云台相对车头的角度换算，左杆向前始终对应云台朝向。 */
+    const float c = cosf(yaw);
+    const float s = sinf(yaw);
 
-    /* 计算角度的正弦。 */
-    float s = sinf(yaw);
-
-    /* 把云台坐标系的前后速度转到底盘 x 轴。 */
+    /* 把摇杆坐标系的前后速度转到底盘 x 轴。 */
     command->vx_rpm = input->vx_rpm * c - input->vy_rpm * s;
 
-    /* 把云台坐标系的平移速度转到底盘 y 轴。 */
+    /* 把摇杆坐标系的横移速度转到底盘 y 轴。 */
     command->vy_rpm = input->vx_rpm * s + input->vy_rpm * c;
 }
 

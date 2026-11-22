@@ -22,8 +22,22 @@
 /* 控制周期，单位 s。 */
 #define APP_CONTROL_DT 0.001f
 
-/* 回中时按底盘转向指令给云台反向补偿，单位为云台 rpm / 轮速分量 rpm。 */
-#define APP_GIMBAL_FOLLOW_COMPENSATION 0.005f
+/* 从上往下看，逆时针读数为正时用 +1，读数为负时用 -1。 */
+#define APP_IMU_YAW_DIR           1.0f
+#define APP_IMU_BIAS_SAMPLES      200U
+#define APP_YAW_FEEDBACK_AGE_MS   20U
+#define APP_RPM_TO_RAD_S          0.104719755f
+#define APP_YAW_HOLD_KP           12.0f /* rpm/rad */
+#define APP_YAW_HOLD_MAX_RPM      15.0f
+
+typedef struct
+{
+    float yaw_rpm;
+    uint32_t last_update_ms;
+    uint8_t valid;
+} ChassisGyroFeedback;
+
+static volatile ChassisGyroFeedback gyro_feedback;
 
 /* 底盘最后生成的命令，方便调试器 Watch。 */
 ChassisCommand chassis_command;
@@ -58,6 +72,33 @@ void ChassisApp_SetGimbalFeedback(float relative_yaw_rad)
     /* 恢复中断状态。 */
     __set_PRIMASK(irq_state); /* 恢复之前的中断屏蔽状态，不能简单地一律打开中断。 */
 }
+
+void ChassisApp_SetGyroZ(float gyro_z_dps)
+{
+    static uint32_t sample_count;
+    static float bias_sum_dps;
+    static float bias_dps;
+
+    /* 开机保持底盘静止，用前 200 个成功样本估计零偏。 */
+    if (sample_count < APP_IMU_BIAS_SAMPLES)
+    {
+        bias_sum_dps += gyro_z_dps;
+        sample_count++;
+        if (sample_count < APP_IMU_BIAS_SAMPLES) return;
+        bias_dps = bias_sum_dps / (float)APP_IMU_BIAS_SAMPLES;
+    }
+
+    const float yaw_rpm = APP_IMU_YAW_DIR * (gyro_z_dps - bias_dps) / 6.0f;
+    const uint32_t sample_ms = HAL_GetTick();
+
+    const uint32_t irq_state = __get_PRIMASK();
+    __disable_irq();
+    gyro_feedback.yaw_rpm = yaw_rpm;
+    gyro_feedback.last_update_ms = sample_ms;
+    gyro_feedback.valid = 1U;
+    __set_PRIMASK(irq_state);
+}
+
 /* 初始化底盘应用。 */
 /* 函数作用：初始化电机软件状态和指示灯；不负责初始化 CAN、串口或定时器硬件。 */
 void ChassisApp_Init(void)
@@ -70,6 +111,47 @@ void ChassisApp_Init(void)
 
     /* 点亮停止灯。 */
     HAL_GPIO_WritePin(GPIOH, GPIO_PIN_12, GPIO_PIN_SET);
+}
+
+typedef struct
+{
+    float target_rpm;
+    float hold_error_rad;
+} GimbalYawCommand;
+
+/* 跟随档和自旋档共用对地稳向，将摇杆目标换算为 GM6020 相对底盘的转速目标。 */
+static GimbalYawCommand GimbalYawControl(float stick_target_rpm, float relative_yaw_rad,
+                                        float chassis_yaw_rpm, uint8_t stabilize_yaw)
+{
+    static float chassis_yaw_rad;
+    static float hold_yaw_rad;
+    static uint8_t gimbal_holding;
+    GimbalYawCommand command = {.target_rpm = stick_target_rpm};
+
+    if (!stabilize_yaw)
+    {
+        chassis_yaw_rad = 0.0f;
+        gimbal_holding = 0U;
+        return command;
+    }
+
+    chassis_yaw_rad = ChassisControl_WrapAngle(
+        chassis_yaw_rad + chassis_yaw_rpm * APP_RPM_TO_RAD_S * APP_CONTROL_DT);
+    const float gimbal_world_yaw_rad = chassis_yaw_rad + relative_yaw_rad;
+
+    const uint8_t stick_centered = (stick_target_rpm == 0.0f);
+    float world_target_rpm = GM6020_YAW_DIR * stick_target_rpm;
+    if (stick_centered)
+    {
+        if (!gimbal_holding) hold_yaw_rad = gimbal_world_yaw_rad;
+        command.hold_error_rad = ChassisControl_WrapAngle(hold_yaw_rad - gimbal_world_yaw_rad);
+        const float hold_rpm = APP_YAW_HOLD_KP * command.hold_error_rad;
+        world_target_rpm = fmaxf(-APP_YAW_HOLD_MAX_RPM, fminf(APP_YAW_HOLD_MAX_RPM, hold_rpm));
+    }
+    gimbal_holding = stick_centered;
+
+    command.target_rpm = GM6020_YAW_DIR * (world_target_rpm - chassis_yaw_rpm);
+    return command;
 }
 
 /* 1 ms 执行一次。 */
@@ -104,7 +186,7 @@ void ChassisApp_Run1ms(void)
     /* 保存中断状态。 */
     uint32_t irq_state = __get_PRIMASK(); /* irq 是中断；保存进入本段代码前的中断屏蔽状态。 */
 
-    /* 复制云台反馈时关闭中断。 */
+    /* 一起复制云台和陀螺仪反馈。 */
     __disable_irq(); /* 暂时禁止可屏蔽中断，避免复制或更新数据时被打断。 */
 
     /* 复制相对角度。 */
@@ -115,6 +197,11 @@ void ChassisApp_Run1ms(void)
 
     /* 复制有效标志。 */
     feedback.valid = gimbal_feedback.valid;
+    const ChassisGyroFeedback gyro = {
+        .yaw_rpm = gyro_feedback.yaw_rpm,
+        .last_update_ms = gyro_feedback.last_update_ms,
+        .valid = gyro_feedback.valid,
+    };
 
     /* 恢复中断状态。 */
     __set_PRIMASK(irq_state); /* 恢复之前的中断屏蔽状态，不能简单地一律打开中断。 */
@@ -125,26 +212,27 @@ void ChassisApp_Run1ms(void)
     /* 根据本轮的遥控快照，算出平移速度、自旋档位和使能。 */
     ChassisInput input = ChassisRemote_Read(&rc, now);
 
-    /* 计算底盘命令。 */
-    ChassisControl_Step(&input, &feedback, now, &chassis_command);
-
-    /* 把命令分配到四个轮子。 */
-    ChassisControl_Mix(&chassis_command, APP_ROTOR_RPM_LIMIT, wheel_targets);
-
-    /* 计算速度 PI 并发送电流。 */
-    ChassisMotor_Update(wheel_targets,
-                        (uint8_t)(chassis_command.mode != CHASSIS_ZERO_FORCE), /* 模式不是零力时，才让电机模块计算输出电流。 */
-                        APP_CONTROL_DT); /* 传入控制间隔 0.001 秒，供 PI 积分计算使用。 */
-
-    uint8_t stick_centered = (uint8_t)(input.yaw_target_rpm == 0.0f);
-    float gimbal_target_rpm = input.yaw_target_rpm;
-    if (stick_centered && chassis_command.mode == CHASSIS_FOLLOW_GIMBAL)
+    const uint8_t yaw_feedback_fresh = gyro.valid && feedback.valid &&
+        (uint32_t)(now - gyro.last_update_ms) <= APP_YAW_FEEDBACK_AGE_MS &&
+        (uint32_t)(now - feedback.last_update_ms) <= APP_YAW_FEEDBACK_AGE_MS;
+    if ((input.use_gimbal && !yaw_feedback_fresh) ||
+        (input.spin != CHASSIS_SPIN_OFF && !input.use_gimbal))
     {
-        /* 车头追齐时给云台留出相对转动，避免回中制动把云台拖着走。 */
-        gimbal_target_rpm = -GM6020_YAW_DIR * APP_GIMBAL_FOLLOW_COMPENSATION *
-                            chassis_command.wz_rpm;
+        input.enabled = 0U;
     }
-    GM6020_Update(gimbal_target_rpm, input.enabled, APP_CONTROL_DT, stick_centered);
+
+    const uint8_t stabilize_yaw = input.enabled && input.use_gimbal;
+    const GimbalYawCommand gimbal = GimbalYawControl(
+        input.yaw_target_rpm, feedback.relative_yaw_rad, gyro.yaw_rpm, stabilize_yaw);
+    input.gimbal_hold_error_rad = gimbal.hold_error_rad;
+
+    ChassisControl_Step(&input, &feedback, now, &chassis_command);
+    const uint8_t drive_enabled = (chassis_command.mode != CHASSIS_ZERO_FORCE);
+    ChassisControl_Mix(&chassis_command, APP_ROTOR_RPM_LIMIT, wheel_targets);
+    ChassisMotor_Update(wheel_targets, drive_enabled, APP_CONTROL_DT);
+    /* 稳向期间持续使用速度 PI 和 IMU 反转补偿。 */
+    const uint8_t speed_brake = !stabilize_yaw && input.yaw_target_rpm == 0.0f;
+    GM6020_Update(gimbal.target_rpm, drive_enabled, APP_CONTROL_DT, speed_brake);
 
     /* 每 100 ms 更新一次 LED。 */
     if ((uint32_t)(now - led_ms) >= 100U)

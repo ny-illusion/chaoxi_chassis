@@ -17,11 +17,12 @@
   */
 /* USER CODE END Header */
 /* Includes ------------------------------------------------------------------*/
-#include "main.h" /* 引入芯片库公共类型和错误处理声明。 */
-#include "can.h" /* 引入CAN 外设句柄和初始化声明。 */
-#include "tim.h" /* 引入定时器句柄和初始化声明。 */
-#include "usart.h" /* 引入串口句柄和初始化声明。 */
-#include "gpio.h" /* 引入引脚初始化声明。 */
+#include "main.h"
+#include "can.h"
+#include "spi.h"
+#include "tim.h"
+#include "usart.h"
+#include "gpio.h"
 
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
@@ -50,11 +51,18 @@
 
 /* USER CODE BEGIN PV */
 
+volatile uint8_t imu_gyro_id = 0;
+volatile int32_t imu_spi_status = -1;
+volatile uint8_t imu_gyro_range = 0xFFU;
+volatile int32_t imu_gyro_range_status = -1;
+volatile int16_t imu_gyro_z_raw = 0;
+volatile float imu_gyro_z_dps = 0.0f;
+volatile int32_t imu_gyro_read_status = -1;
+
 /* USER CODE END PV */
 
 /* Private function prototypes -----------------------------------------------*/
-/* 函数作用：配置晶振、PLL 和总线时钟；没有输入参数，也不返回数值。 */
-void SystemClock_Config(void); /* 提前声明时钟配置函数，下面的 main 才能调用它。 */
+void SystemClock_Config(void);
 /* USER CODE BEGIN PFP */
 
 /* USER CODE END PFP */
@@ -74,12 +82,10 @@ void SystemClock_Config(void); /* 提前声明时钟配置函数，下面的 mai
 
 /* USER CODE END 0 */
 
-
 /**
-  * @brief  程序入口：初始化硬件，再等待中断运行控制任务。
+  * @brief  The application entry point.
   * @retval int
   */
-/* 函数作用：程序入口：上电初始化外设，启动接收和定时器；后续控制在中断中执行。 */
 int main(void)
 {
 
@@ -89,28 +95,55 @@ int main(void)
 
   /* MCU Configuration--------------------------------------------------------*/
 
-  /* 初始化芯片库、Flash 接口和系统滴答计时。 */
-
-  HAL_Init(); /* 初始化芯片库、系统毫秒计时和中断分组。 */
+  /* Reset of all peripherals, Initializes the Flash interface and the Systick. */
+  HAL_Init();
 
   /* USER CODE BEGIN Init */
 
   /* USER CODE END Init */
 
-  /* 设置系统时钟。 */
-  SystemClock_Config(); /* 配置系统和外设总线使用的时钟。 */
+  /* Configure the system clock */
+  SystemClock_Config();
 
   /* USER CODE BEGIN SysInit */
 
   /* USER CODE END SysInit */
 
-  /* 初始化所需外设。 */
-  MX_GPIO_Init(); /* 初始化引脚，包括运行灯和停止灯。 */
-  MX_CAN1_Init(); /* 配置 CAN1 的通信速率等参数，稍后再启动通信。 */
-  MX_TIM6_Init(); /* 配置 TIM6，使它每隔 1 ms 产生一次更新事件。 */
-  MX_USART1_UART_Init(); /* 配置 USART1，供遥控接收机传入 SBUS 数据。 */
+  /* Initialize all configured peripherals */
+  MX_GPIO_Init();
+  MX_CAN1_Init();
+  MX_TIM6_Init();
+  MX_USART1_UART_Init();
+  MX_SPI1_Init();
   /* USER CODE BEGIN 2 */
+
+uint8_t tx[2] = {0x80, 0x00};  // 读寄存器 0x00，最高位置 1 表示读
+uint8_t rx[2] = {0};
+
+HAL_GPIO_WritePin(GPIOA, GPIO_PIN_4, GPIO_PIN_SET);    // 加速度计不占用总线
+HAL_GPIO_WritePin(GPIOB, GPIO_PIN_0, GPIO_PIN_SET);    // 陀螺仪片选先拉高
+HAL_Delay(100);                                       // 等传感器上电稳定
+
+HAL_GPIO_WritePin(GPIOB, GPIO_PIN_0, GPIO_PIN_RESET);  // 选中陀螺仪
+imu_spi_status = HAL_SPI_TransmitReceive(&hspi1, tx, rx, 2, 10);
+HAL_GPIO_WritePin(GPIOB, GPIO_PIN_0, GPIO_PIN_SET);    // 结束本次读取
+
+if (imu_spi_status == HAL_OK) {
+    imu_gyro_id = rx[1];  // 第一个字节发地址，第二个字节收到 ID
+}
   
+if (imu_gyro_id == 0x0FU) {
+    tx[0] = 0x8FU;  /* 读取 GYRO_RANGE（0x0F），tx[1] 仍为 0。 */
+    HAL_GPIO_WritePin(GPIOB, GPIO_PIN_0, GPIO_PIN_RESET);
+    imu_gyro_range_status = (int32_t)HAL_SPI_TransmitReceive(
+        &hspi1, tx, rx, 2U, 10U);
+    HAL_GPIO_WritePin(GPIOB, GPIO_PIN_0, GPIO_PIN_SET);
+
+    if (imu_gyro_range_status == HAL_OK) {
+        imu_gyro_range = rx[1];
+    }
+}
+
 CAN_FilterTypeDef filter = {0};                  /* 先全清零，避免垃圾值 */
 filter.FilterBank           = 0;                 /* 用 0 号滤波器 */
 filter.FilterMode           = CAN_FILTERMODE_IDMASK;  /* 掩码模式 */
@@ -133,71 +166,90 @@ HAL_CAN_ActivateNotification(&hcan1, CAN_IT_RX_FIFO0_MSG_PENDING); /* 允许 CAN
 HAL_TIM_Base_Start_IT(&htim6);      /* ★ 启动 TIM6，每 1ms 进一次中断 */
   /* USER CODE END 2 */
 
-  /* 主循环：这里暂时为空，控制任务在中断里执行。 */
+  /* Infinite loop */
   /* USER CODE BEGIN WHILE */
    while (1) /* 一直循环等待；这里控制任务由中断调用，循环中暂无操作。 */
   {
     /* USER CODE END WHILE */
 
-
-
-
-
-
     /* USER CODE BEGIN 3 */
+
+    static uint32_t last_gyro_poll_ms = 0U;
+    const uint32_t now_ms = HAL_GetTick();
+
+    if (imu_gyro_range == 0x00U &&
+        (uint32_t)(now_ms - last_gyro_poll_ms) >= 5U) {
+        last_gyro_poll_ms = now_ms;
+
+        const uint8_t z_tx[3] = {0x86U, 0x00U, 0x00U};
+        uint8_t z_rx[3] = {0};
+
+        HAL_GPIO_WritePin(GPIOB, GPIO_PIN_0, GPIO_PIN_RESET);
+        const HAL_StatusTypeDef status =
+            HAL_SPI_TransmitReceive(&hspi1, z_tx, z_rx, 3U, 2U);
+        HAL_GPIO_WritePin(GPIOB, GPIO_PIN_0, GPIO_PIN_SET);
+
+        if (status == HAL_OK) {
+            const int16_t raw = (int16_t)(((uint16_t)z_rx[2] << 8) | z_rx[1]);
+            const float dps = (float)raw * (2000.0f / 32768.0f);
+            imu_gyro_z_raw = raw;
+            imu_gyro_z_dps = dps;
+            ChassisApp_SetGyroZ(dps);
+        }
+        imu_gyro_read_status = (int32_t)status;
+    }
 
   }
   /* USER CODE END 3 */
 }
 
 /**
-  * @brief 系统时钟配置：设置晶振、PLL 和各总线分频。
+  * @brief System Clock Configuration
   * @retval None
   */
-/* 函数作用：配置晶振、PLL 和总线时钟；没有输入参数，也不返回数值。 */
 void SystemClock_Config(void)
 {
-  RCC_OscInitTypeDef RCC_OscInitStruct = {0}; /* 准备晶振和倍频器配置，先把各字段清零。 */
-  RCC_ClkInitTypeDef RCC_ClkInitStruct = {0}; /* 准备 CPU 和各总线的时钟配置。 */
+  RCC_OscInitTypeDef RCC_OscInitStruct = {0};
+  RCC_ClkInitTypeDef RCC_ClkInitStruct = {0};
 
-  /** 设置芯片内部稳压器的工作档位。
+  /** Configure the main internal regulator output voltage
   */
-  __HAL_RCC_PWR_CLK_ENABLE(); /* 打开电源控制模块的时钟，才能修改它的设置。 */
-  __HAL_PWR_VOLTAGESCALING_CONFIG(PWR_REGULATOR_VOLTAGE_SCALE1); /* 选择芯片高速运行所需的内部电压档位。 */
+  __HAL_RCC_PWR_CLK_ENABLE();
+  __HAL_PWR_VOLTAGESCALING_CONFIG(PWR_REGULATOR_VOLTAGE_SCALE1);
 
-  /** 按照下面填写的参数配置晶振和 PLL。
-  * RCC_OscInitTypeDef 是保存这些配置的结构体类型。
+  /** Initializes the RCC Oscillators according to the specified parameters
+  * in the RCC_OscInitTypeDef structure.
   */
-  RCC_OscInitStruct.OscillatorType = RCC_OSCILLATORTYPE_HSE; /* 选择外部高速时钟 HSE 作为本次配置对象。 */
-  RCC_OscInitStruct.HSEState = RCC_HSE_ON; /* 打开外部高速晶振。 */
-  RCC_OscInitStruct.PLL.PLLState = RCC_PLL_ON; /* 打开 PLL 倍频器，用来得到更高频率。 */
-  RCC_OscInitStruct.PLL.PLLSource = RCC_PLLSOURCE_HSE; /* PLL 的输入来自外部晶振。 */
-  RCC_OscInitStruct.PLL.PLLM = 6; /* PLL 输入先除以 6；与外部晶振频率配套使用。 */
-  RCC_OscInitStruct.PLL.PLLN = 168; /* 再把频率乘以 168。 */
-  RCC_OscInitStruct.PLL.PLLP = RCC_PLLP_DIV2; /* 主时钟输出再除以 2；最终频率为 HSE ÷ 6 × 168 ÷ 2。 */
-  RCC_OscInitStruct.PLL.PLLQ = 4; /* PLL 的另一条输出支路除以 4，供有关外设使用。 */
-  if (HAL_RCC_OscConfig(&RCC_OscInitStruct) != HAL_OK) /* 应用晶振和 PLL 配置；失败就进入下面的错误处理。 */
+  RCC_OscInitStruct.OscillatorType = RCC_OSCILLATORTYPE_HSE;
+  RCC_OscInitStruct.HSEState = RCC_HSE_ON;
+  RCC_OscInitStruct.PLL.PLLState = RCC_PLL_ON;
+  RCC_OscInitStruct.PLL.PLLSource = RCC_PLLSOURCE_HSE;
+  RCC_OscInitStruct.PLL.PLLM = 6;
+  RCC_OscInitStruct.PLL.PLLN = 168;
+  RCC_OscInitStruct.PLL.PLLP = RCC_PLLP_DIV2;
+  RCC_OscInitStruct.PLL.PLLQ = 4;
+  if (HAL_RCC_OscConfig(&RCC_OscInitStruct) != HAL_OK)
   {
-    Error_Handler(); /* 进入错误处理函数，关闭可屏蔽中断并停在循环中。 */
+    Error_Handler();
   }
 
-  /** 设置 CPU、AHB 和 APB 外设总线的时钟。
+  /** Initializes the CPU, AHB and APB buses clocks
   */
-  RCC_ClkInitStruct.ClockType = RCC_CLOCKTYPE_HCLK|RCC_CLOCKTYPE_SYSCLK /* 用按位或 | 同时选择 AHB 和系统时钟配置项。 */
-                              |RCC_CLOCKTYPE_PCLK1|RCC_CLOCKTYPE_PCLK2; /* 继续选择 APB1、APB2 两条外设总线的时钟配置项。 */
-  RCC_ClkInitStruct.SYSCLKSource = RCC_SYSCLKSOURCE_PLLCLK; /* 系统主时钟采用 PLL 的输出。 */
-  RCC_ClkInitStruct.AHBCLKDivider = RCC_SYSCLK_DIV1; /* AHB 总线使用系统时钟，不再分频。 */
-  RCC_ClkInitStruct.APB1CLKDivider = RCC_HCLK_DIV4; /* APB1 总线频率是 AHB 的四分之一。 */
-  RCC_ClkInitStruct.APB2CLKDivider = RCC_HCLK_DIV2; /* APB2 总线频率是 AHB 的二分之一。 */
+  RCC_ClkInitStruct.ClockType = RCC_CLOCKTYPE_HCLK|RCC_CLOCKTYPE_SYSCLK
+                              |RCC_CLOCKTYPE_PCLK1|RCC_CLOCKTYPE_PCLK2;
+  RCC_ClkInitStruct.SYSCLKSource = RCC_SYSCLKSOURCE_PLLCLK;
+  RCC_ClkInitStruct.AHBCLKDivider = RCC_SYSCLK_DIV1;
+  RCC_ClkInitStruct.APB1CLKDivider = RCC_HCLK_DIV4;
+  RCC_ClkInitStruct.APB2CLKDivider = RCC_HCLK_DIV2;
 
-  if (HAL_RCC_ClockConfig(&RCC_ClkInitStruct, FLASH_LATENCY_5) != HAL_OK) /* 应用总线时钟，并设置 Flash 读取等待周期；失败则处理错误。 */
+  if (HAL_RCC_ClockConfig(&RCC_ClkInitStruct, FLASH_LATENCY_5) != HAL_OK)
   {
-    Error_Handler(); /* 进入错误处理函数，关闭可屏蔽中断并停在循环中。 */
+    Error_Handler();
   }
 
-  /** 打开外部时钟故障检测。
+  /** Enables the Clock Security System
   */
-  HAL_RCC_EnableCSS(); /* 启用外部时钟故障检测，CSS 表示时钟安全系统。 */
+  HAL_RCC_EnableCSS();
 }
 
 /* USER CODE BEGIN 4 */
@@ -247,10 +299,9 @@ void HAL_UART_RxCpltCallback(UART_HandleTypeDef *huart)
 /* USER CODE END 4 */
 
 /**
-  * @brief  初始化出错时执行：关闭可屏蔽中断，停在循环内。
+  * @brief  This function is executed in case of error occurrence.
   * @retval None
   */
-/* 函数作用：硬件初始化失败时调用；关闭可屏蔽中断并永久等待。这里没有主动发送零电流。 */
 void Error_Handler(void)
 {
   /* USER CODE BEGIN Error_Handler_Debug */
@@ -263,13 +314,12 @@ void Error_Handler(void)
 }
 #ifdef USE_FULL_ASSERT
 /**
-  * @brief  断言失败回调：提供出错文件名和代码行号。
-  * assert_param 表示检查函数参数是否符合要求。
-  * @param  file：指向出错文件名的指针。
-  * @param  line：断言失败处的代码行号。
+  * @brief  Reports the name of the source file and the source line number
+  *         where the assert_param error has occurred.
+  * @param  file: pointer to the source file name
+  * @param  line: assert_param error line source number
   * @retval None
   */
-/* 函数作用：完整断言开启时报告参数错误；file 是文件名，line 是出错行号。目前函数体为空。 */
 void assert_failed(uint8_t *file, uint32_t line)
 {
   /* USER CODE BEGIN 6 */

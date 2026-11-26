@@ -1,9 +1,17 @@
 /* USER CODE BEGIN Header */
 /**
   ******************************************************************************
-  * @file    stm32f4xx_hal_conf_template.h
+  * @file stm32f4xx_hal_conf.h
   * @author  MCD Application Team
-  * @brief   HAL configuration template file.
+  * @brief STM32F4 HAL 编译期配置
+  * @board 底盘板
+  * @vehicle_function 为本板选择 HAL 模块与时钟常量
+  * @inputs 工程目标宏、HAL 模块选择和配置宏
+  * @outputs 供 HAL 编译单元使用的宏与模块声明
+  * @dependencies STM32F4 HAL 模块头文件
+  * @note 重构说明：本文件行为与原代码保持一致。由 HAL 入口头文件包含。
+  *
+  * HAL configuration template file.
   *          This file should be copied to the application folder and renamed
   *          to stm32f4xx_hal_conf.h.
   ******************************************************************************
@@ -64,7 +72,7 @@
 /* #define HAL_MMC_MODULE_ENABLED */
 #define HAL_SPI_MODULE_ENABLED
 #define HAL_TIM_MODULE_ENABLED
-#define HAL_UART_MODULE_ENABLED
+/* #define HAL_UART_MODULE_ENABLED */
 /* #define HAL_USART_MODULE_ENABLED */
 /* #define HAL_IRDA_MODULE_ENABLED */
 /* #define HAL_SMARTCARD_MODULE_ENABLED */

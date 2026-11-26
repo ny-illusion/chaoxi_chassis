@@ -1,8 +1,16 @@
 /**
   ******************************************************************************
-  * @file      startup_stm32f407xx.s
+  * @file startup_stm32f407xx.s
   * @author    MCD Application Team
-  * @brief     STM32F407xx Devices vector table for GCC based toolchains. 
+  * @brief Cortex-M4 复位入口与异常向量表
+  * @board 底盘板
+  * @vehicle_function 建立本板固件上电执行入口与中断分派
+  * @inputs 复位、中断以及链接脚本的内存符号
+  * @outputs 初始栈、运行时初值及指向中断处理函数的向量
+  * @dependencies CMSIS SystemInit、C 运行库、链接脚本
+  * @note 重构说明：本文件行为与原代码保持一致。复位及中断符号由硬件向量表引用。
+  *
+  * STM32F407xx Devices vector table for GCC based toolchains.
   *            This module performs:
   *                - Set the initial SP
   *                - Set the initial PC == Reset_Handler,

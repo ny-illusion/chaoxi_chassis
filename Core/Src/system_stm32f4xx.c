@@ -1,8 +1,16 @@
 /**
   ******************************************************************************
-  * @file    system_stm32f4xx.c
+  * @file system_stm32f4xx.c
   * @author  MCD Application Team
-  * @brief   CMSIS Cortex-M4 Device Peripheral Access Layer System Source File.
+  * @brief CMSIS 系统初始化与核心时钟记录
+  * @board 底盘板
+  * @vehicle_function 为固件提供复位入口的系统配置与 HCLK 频率
+  * @inputs 启动入口、RCC 寄存器和芯片编译宏
+  * @outputs 系统初始化副作用及 SystemCoreClock
+  * @dependencies stm32f4xx.h、CMSIS 与芯片时钟寄存器
+  * @note 重构说明：本文件行为与原代码保持一致。启动代码会在进入应用入口之前调用 SystemInit。
+  *
+  * CMSIS Cortex-M4 Device Peripheral Access Layer System Source File.
   *
   *   This file provides two functions and one global variable to be called from 
   *   user application:

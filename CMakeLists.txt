@@ -1,3 +1,12 @@
+# @file CMakeLists.txt
+# @brief 本板固件的 CMake 入口
+# @board 底盘板
+# @vehicle_function 把应用代码、CubeMX 代码和启动文件链接为本板固件
+# @inputs CMake 预设、工具链文件及工程源文件列表
+# @outputs CMake 固件构建目标
+# @dependencies CMake、cmake/stm32cubemx 和 Arm 工具链
+# @note 重构说明：本文件行为与原代码保持一致。手写模块通过顶层 target_sources 登记。
+
 cmake_minimum_required(VERSION 3.22)
 
 #
@@ -45,11 +54,14 @@ target_link_directories(${CMAKE_PROJECT_NAME} PRIVATE
 # Add sources to executable
 target_sources(${CMAKE_PROJECT_NAME} PRIVATE
     # Add user sources here
-    Core/Src/chassis_loop.c
-    Core/Src/chassis_remote.c
-    Core/Src/chassis_motion.c
-    Core/Src/chassis_motor.c
-    Core/Src/rc_sbus.c
+    Core/Src/chassis_control_loop.c
+    Core/Src/chassis_motion_control.c
+    Core/Src/chassis_wheel_kinematics.c
+    Core/Src/chassis_motor_driver.c
+    Core/Src/chassis_can_bus.c
+    Core/Src/chassis_imu_feedback.c
+    Core/Src/chassis_remote_communication.c
+    Core/Src/chassis_remote_input.c
 )
 
 # Add include paths

@@ -1,8 +1,16 @@
 /* USER CODE BEGIN Header */
 /**
   ******************************************************************************
-  * @file           : main.h
-  * @brief          : Header for main.c file.
+  * @file main.h
+  * @brief 底盘 HAL 入口与故障处理声明
+  * @board 底盘板
+  * @vehicle_function 向本板各外设模块提供一致的 HAL 类型和错误入口
+  * @inputs 编译器目标宏及 STM32F4 HAL 配置
+  * @outputs HAL 类型和 Error_Handler 声明
+  * @dependencies stm32f4xx_hal.h
+  * @note 重构说明：本文件行为与原代码保持一致。由 CubeMX 外设头与底盘应用模块间接使用。
+  *
+  * Header for main.c file.
   *                   This file contains the common defines of the application.
   ******************************************************************************
   * @attention
@@ -17,53 +25,28 @@
   ******************************************************************************
   */
 /* USER CODE END Header */
-
-/* Define to prevent recursive inclusion -------------------------------------*/
 #ifndef __MAIN_H
 #define __MAIN_H
-
 #ifdef __cplusplus
-extern "C" {
+extern "C"
+{
 #endif
 
-/* Includes ------------------------------------------------------------------*/
 #include "stm32f4xx_hal.h"
-
-/* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
-
 /* USER CODE END Includes */
-
-/* Exported types ------------------------------------------------------------*/
 /* USER CODE BEGIN ET */
-
 /* USER CODE END ET */
-
-/* Exported constants --------------------------------------------------------*/
 /* USER CODE BEGIN EC */
-
 /* USER CODE END EC */
-
-/* Exported macro ------------------------------------------------------------*/
 /* USER CODE BEGIN EM */
-
 /* USER CODE END EM */
-
-/* Exported functions prototypes ---------------------------------------------*/
-void Error_Handler(void);
-
+    void Error_Handler(void);  // CubeMX 生成的错误处理入口
 /* USER CODE BEGIN EFP */
-
 /* USER CODE END EFP */
-
-/* Private defines -----------------------------------------------------------*/
-
 /* USER CODE BEGIN Private defines */
-
 /* USER CODE END Private defines */
-
 #ifdef __cplusplus
 }
 #endif
-
-#endif /* __MAIN_H */
+#endif
